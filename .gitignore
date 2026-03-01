@@ -1,0 +1,16 @@
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+.DS_Store
+*.log
+.gemini/
+.agents/
+.agent/
+_agents/
+_agent/
+brain/
+patch_pydantic.py
+patch_schema.py
+repair_pydantic.py
+clean_pydantic.py
+final_patch.py
