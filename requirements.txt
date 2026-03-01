@@ -6,3 +6,5 @@ seaborn
 nltk
 notebook
 ipywidgets
+streamlit
+pdfplumber
