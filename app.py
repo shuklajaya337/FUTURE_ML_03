@@ -222,7 +222,7 @@ if st.button("🚀 Run Advanced Ranking"):
 
 # Footer
 st.markdown("---")
-st.markdown("<center>Resume AI Pro | Future Intern ML Track | Created by Antigravity</center>", unsafe_allow_html=True)
+st.markdown("<center>Resume AI Pro | Future Intern ML Track</center>", unsafe_allow_html=True)
 
 # Footer
 st.markdown("---")
