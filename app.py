@@ -2,13 +2,17 @@ import streamlit as st
 import pandas as pd
 import pdfplumber
 import io
+import os
+import kagglehub
+import plotly.express as px
+import plotly.graph_objects as go
 from ranker import ResumeRanker
 import base64
 
 # Page Config
 st.set_page_config(
-    page_title="Resume Screening & Ranking System",
-    page_icon="📄",
+    page_title="Pro Resume Screener & Ranker",
+    page_icon="🚀",
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -17,29 +21,13 @@ st.set_page_config(
 st.markdown("""
     <style>
     .main {
-        background-color: #f8f9fa;
+        background-color: #f0f2f5;
     }
-    .stButton>button {
-        width: 100%;
-        border-radius: 5px;
-        height: 3em;
-        background-color: #4F46E5;
-        color: white;
-        font-weight: bold;
-        border: none;
-        transition: 0.3s;
-    }
-    .stButton>button:hover {
-        background-color: #4338CA;
-        border: none;
-        color: white;
-    }
-    .score-card {
+    .stMetric {
         background-color: white;
-        padding: 20px;
+        padding: 15px;
         border-radius: 10px;
-        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
-        border-left: 5px solid #10B981;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.05);
     }
     .skill-badge {
         display: inline-block;
@@ -55,10 +43,13 @@ st.markdown("""
         background-color: #FEE2E2;
         color: #991B1B;
     }
+    .sidebar-content {
+        padding: 10px;
+    }
     </style>
     """, unsafe_allow_html=True)
 
-# Helper function to extract text from PDF
+# Helper functions
 def extract_text_from_pdf(file):
     with pdfplumber.open(file) as pdf:
         text = ""
@@ -66,133 +57,172 @@ def extract_text_from_pdf(file):
             text += page.extract_text() + "\n"
     return text
 
-# Initialize Ranker
 @st.cache_resource
 def get_ranker():
     return ResumeRanker()
+
+@st.cache_data
+def load_kaggle_data():
+    try:
+        path = kagglehub.dataset_download("snehaanbhawal/resume-dataset")
+        csv_path = os.path.join(path, "Resume", "Resume.csv")
+        df = pd.read_csv(csv_path)
+        # Map columns to match our expectation
+        df = df.rename(columns={'Resume_str': 'Resume_Text', 'ID': 'Candidate_Name'})
+        df['Candidate_Name'] = df['Candidate_Name'].astype(str) + " (" + df['Category'] + ")"
+        return df
+    except Exception as e:
+        st.error(f"Failed to load Kaggle dataset: {e}")
+        return None
 
 ranker = get_ranker()
 
 # Sidebar
 with st.sidebar:
-    st.title("⚙️ Configuration")
-    st.info("Upload resumes and enter the Job Description to find the best candidates.")
+    st.title("🚀 Pro Settings")
+    
+    st.subheader("⚖️ Weighting Logic")
+    skill_weight = st.slider("Skill Match Weight (%)", 0, 100, 60)
+    sim_weight = 100 - skill_weight
+    st.caption(f"Current split: {skill_weight}% Skills / {sim_weight}% General Similarity")
     
     st.divider()
     
-    st.markdown("### 🛠️ About the System")
-    st.write("This AI-powered tool uses NLP (TF-IDF & spaCy) to rank candidates based on skill matching and text similarity.")
+    st.subheader("📦 Dataset Source")
+    data_source = st.radio("Choose Resume Source:", ["Manual Upload", "Local Sample (CSV)", "Kaggle Dataset (2400+ Resumes)"])
+    
+    if data_source == "Kaggle Dataset (2400+ Resumes)":
+        num_resumes = st.slider("Number of resumes to pull from Kaggle", 10, 500, 100)
+    
+    st.divider()
+    st.markdown("### 📊 System Analytics")
+    st.info("The system uses spaCy for Named Entity Recognition and TF-IDF for semantic similarity.")
 
 # Main Header
-st.title("📄 Resume Screening & Ranking System")
+st.title("📄 Pro Resume Screening & Ranking System")
 st.markdown("---")
 
-# Layout: Two columns for input
-col1, col2 = st.columns([1, 1])
+# Layout: Inputs
+col_jd, col_files = st.columns([1, 1])
 
-with col1:
-    st.subheader("📝 Job Description")
-    jd_input = st.text_area("Paste the Job Description here:", height=300, placeholder="e.g., We are looking for a Data Scientist with experience in Python, SQL, and Machine Learning...")
+with col_jd:
+    st.header("📝 Job Description")
+    jd_input = st.text_area("Paste the Job Description here:", height=250, placeholder="e.g., Senior Python Developer with 5+ years experience in Flask and AWS...")
 
-with col2:
-    st.subheader("📤 Upload Resumes")
-    uploaded_files = st.file_uploader("Upload Resumes (PDF)", type=["pdf"], accept_multiple_files=True)
-    
-    st.write("OR")
-    
-    use_sample = st.checkbox("Use sample resumes from CSV", value=False)
-    if use_sample:
-        st.info("Loading sample candidates from 'resumes.csv'...")
+with col_files:
+    st.header("📥 Resume Input")
+    if data_source == "Manual Upload":
+        uploaded_files = st.file_uploader("Upload Resumes (PDF)", type=["pdf"], accept_multiple_files=True)
+    elif data_source == "Local Sample (CSV)":
+        st.info("Loading from `resumes.csv`...")
+        uploaded_files = None
+    else:
+        st.success(f"Kaggle Dataset is ready! (Pulling top {num_resumes} records)")
+        uploaded_files = None
 
 # Ranking Logic
-if st.button("🚀 Rank Candidates"):
+if st.button("🚀 Run Advanced Ranking"):
     if not jd_input:
-        st.error("Please enter a Job Description.")
-    elif not uploaded_files and not use_sample:
-        st.error("Please upload resumes or use sample data.")
+        st.error("Please enter a job description.")
     else:
-        with st.spinner("Analyzing resumes and calculating scores..."):
-            # Prepare DataFrame
+        with st.spinner("Analyzing and calculating weights..."):
+            # Data Preparation
             resumes_list = []
             
-            # 1. Process Uploaded PDFs
-            if uploaded_files:
+            if data_source == "Manual Upload" and uploaded_files:
                 for file in uploaded_files:
                     try:
                         text = extract_text_from_pdf(file)
-                        resumes_list.append({
-                            'Candidate_Name': file.name.replace(".pdf", ""),
-                            'Resume_Text': text
-                        })
-                    except Exception as e:
-                        st.error(f"Error processing {file.name}: {e}")
-            
-            # 2. Process Sample CSV
-            if use_sample:
+                        resumes_list.append({'Candidate_Name': file.name.replace(".pdf", ""), 'Resume_Text': text})
+                    except: pass
+            elif data_source == "Local Sample (CSV)":
                 try:
                     df_sample = pd.read_csv("resumes.csv")
-                    resumes_list.extend(df_sample.to_dict('records'))
-                except Exception as e:
-                    st.error(f"Error loading resumes.csv: {e}")
-            
+                    resumes_list = df_sample.to_dict('records')
+                except: pass
+            elif data_source == "Kaggle Dataset (2400+ Resumes)":
+                df_kaggle = load_kaggle_data()
+                if df_kaggle is not None:
+                    resumes_list = df_kaggle.head(num_resumes).to_dict('records')
+
             if resumes_list:
                 df_resumes = pd.DataFrame(resumes_list)
                 
-                # Perform Ranking
+                # Perform Ranking with Dynamic Weights
+                # Temporarily override the weights in the ranker logic if possible, 
+                # but since ranker.py is static, we'll re-calculate the final score here
                 results_df = ranker.rank_candidates(jd_input, df_resumes)
                 
-                # Show Results
+                # Recalculate with dynamic weights
+                results_df['Final_Score'] = (results_df['Skill_Match_Score'] * (skill_weight/100)) + \
+                                           (results_df['Similarity_Score'] * (sim_weight/100))
+                results_df = results_df.sort_values(by='Final_Score', ascending=False)
+
+                # --- DASHBOARD ---
                 st.markdown("---")
-                st.header("🏆 Best Matches")
                 
-                # Display Top Candidate as a Highlight
-                top_candidate = results_df.iloc[0]
-                st.success(f"### 🥇 Top Pick: **{top_candidate['Candidate_Name']}** (Score: {top_candidate['Final_Score']:.2f})")
+                # Metrics Row
+                m1, m2, m3 = st.columns(3)
+                m1.metric("Candidates Processed", len(results_df))
+                m2.metric("Average Score", f"{results_df['Final_Score'].mean():.2f}")
+                m3.metric("Top Score", f"{results_df['Final_Score'].max():.2f}")
+
+                # Charts Row
+                c1, c2 = st.columns([2, 1])
                 
-                # Detailed Results Table
-                st.subheader("📊 Detailed Rankings")
+                with c1:
+                    st.subheader("📊 Ranking Distribution")
+                    fig = px.bar(results_df.head(15), x='Candidate_Name', y='Final_Score', 
+                                 color='Final_Score', color_continuous_scale='Viridis',
+                                 labels={'Candidate_Name': 'Candidate', 'Final_Score': 'Overall Fit'})
+                    st.plotly_chart(fig, use_container_width=True)
                 
-                # Create a cleaner display DF
-                display_df = results_df[['Candidate_Name', 'Final_Score', 'Skill_Match_Score', 'Similarity_Score']].copy()
-                display_df.columns = ['Candidate Name', 'Internal Score', 'Skill Match', 'Text Similarity']
+                with c2:
+                    st.subheader("🎯 Average Skill Fit")
+                    # Show a donut chart of average skill match vs missing
+                    avg_match = results_df['Skill_Match_Score'].mean()
+                    fig_donut = go.Figure(data=[go.Pie(labels=['Matched', 'Gaps'], 
+                                                      values=[avg_match, 1-avg_match], 
+                                                      hole=.6,
+                                                      marker_colors=['#10B981', '#EF4444'])])
+                    fig_donut.update_layout(showlegend=False, height=300)
+                    st.plotly_chart(fig_donut, use_container_width=True)
+
+                # Results Table
+                st.divider()
+                st.subheader("🏆 Detailed Ranking Table")
+                st.dataframe(results_df[['Candidate_Name', 'Final_Score', 'Skill_Match_Score', 'Similarity_Score']]
+                             .style.background_gradient(cmap='YlGnBu', subset=['Final_Score']), 
+                             use_container_width=True)
+
+                # Deep Dive
+                st.divider()
+                st.header("🔍 Individual Candidate Deep-Dive")
+                selected_name = st.selectbox("Select candidate to inspect:", results_df['Candidate_Name'].tolist())
+                cand = results_df[results_df['Candidate_Name'] == selected_name].iloc[0]
+
+                d_col1, d_col2 = st.columns(2)
+                with d_col1:
+                    st.markdown("#### ✅ Skills Found")
+                    if cand['Matched_Skills']:
+                        st.markdown("".join([f'<span class="skill-badge">{s}</span>' for s in cand['Matched_Skills']]), unsafe_allow_html=True)
+                    else: st.write("None")
                 
-                st.dataframe(display_df.style.background_gradient(cmap='Greens', subset=['Internal Score']), use_container_width=True)
-                
-                # Interactive Detailed Analysis
-                st.subheader("🔍 Skill Gap Analysis")
-                selected_candidate = st.selectbox("Select a candidate to view detailed analysis:", results_df['Candidate_Name'].tolist())
-                
-                candidate_data = results_df[results_df['Candidate_Name'] == selected_candidate].iloc[0]
-                
-                c_col1, c_col2 = st.columns(2)
-                
-                with c_col1:
-                    st.markdown("#### ✅ Matched Skills")
-                    if candidate_data['Matched_Skills']:
-                        html = "".join([f'<span class="skill-badge">{s}</span>' for s in candidate_data['Matched_Skills']])
-                        st.markdown(html, unsafe_allow_html=True)
-                    else:
-                        st.write("No direct skill matches found.")
-                        
-                with c_col2:
-                    st.markdown("#### ❌ Missing Skills")
-                    if candidate_data['Missing_Skills']:
-                        html = "".join([f'<span class="skill-badge missing-badge">{s}</span>' for s in candidate_data['Missing_Skills']])
-                        st.markdown(html, unsafe_allow_html=True)
-                    else:
-                        st.write("No missing skills identified! (Perfect match)")
-                
-                st.markdown("---")
-                # Option to download results
-                csv = results_df.to_csv(index=False).encode('utf-8')
-                st.download_button(
-                    label="📥 Download Rankings as CSV",
-                    data=csv,
-                    file_name='resume_rankings.csv',
-                    mime='text/csv',
-                )
+                with d_col2:
+                    st.markdown("#### ❌ Skill Gaps")
+                    if cand['Missing_Skills']:
+                        st.markdown("".join([f'<span class="skill-badge missing-badge">{s}</span>' for s in cand['Missing_Skills']]), unsafe_allow_html=True)
+                    else: st.success("Perfect Match!")
+
+                st.markdown("#### 📝 Cleaned Resume Excerpt")
+                st.text_area("Preview:", value=cand['Cleaned_Resume'][:1000] + "...", height=150, disabled=True)
+
             else:
-                st.warning("No valid resume text found to analyze.")
+                st.warning("No resumes found to analyze. Check your upload or dataset connection.")
+
+# Footer
+st.markdown("---")
+st.markdown("<center>Resume AI Pro | Future Intern ML Track | Created by Antigravity</center>", unsafe_allow_html=True)
 
 # Footer
 st.markdown("---")
